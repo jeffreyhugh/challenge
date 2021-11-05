@@ -77,69 +77,71 @@ func HandleRun(w http.ResponseWriter, r *http.Request, cr *structs.CustomRouter)
 		return
 	}
 
-	ctx := context.Background()
-	dockerBuildContext, _ := archive.TarWithOptions("./", &archive.TarOptions{
-		IncludeFiles: []string{
-			fmt.Sprintf("dockerfiles/%s.dockerfile", selectedLang),
-			fmt.Sprintf("submissions/%s.%s", id, selectedLang),
-		},
-	})
-	_, err = cr.Docker.ImageBuild(ctx, dockerBuildContext, types.ImageBuildOptions{
-		Dockerfile: fmt.Sprintf("dockerfiles/%s.dockerfile", selectedLang),
-		BuildArgs: map[string]*string{
-			"SUBMISSION_ID": &id,
-		},
-		Tags:        []string{fmt.Sprintf("challenge/%s", id)},
-		ForceRemove: true,
-	})
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(runError{
-			Code:    http.StatusInternalServerError,
-			Message: "could not build image",
+	go func() {
+		ctx := context.Background()
+		dockerBuildContext, _ := archive.TarWithOptions("./", &archive.TarOptions{
+			IncludeFiles: []string{
+				fmt.Sprintf("dockerfiles/%s.dockerfile", selectedLang),
+				fmt.Sprintf("submissions/%s.%s", id, selectedLang),
+			},
 		})
-		gologger.Warn("could not build image", err, nil)
-		return
-	}
-
-	// create the container
-	resp := &container.ContainerCreateCreatedBody{}
-	for i := 0; i < 32; i++ {
-		r, err := cr.Docker.ContainerCreate(ctx, &container.Config{
-			Image: fmt.Sprintf("challenge/%s", id),
-		}, nil, nil, nil, id)
+		_, err = cr.Docker.ImageBuild(ctx, dockerBuildContext, types.ImageBuildOptions{
+			Dockerfile: fmt.Sprintf("dockerfiles/%s.dockerfile", selectedLang),
+			BuildArgs: map[string]*string{
+				"SUBMISSION_ID": &id,
+			},
+			Tags:        []string{fmt.Sprintf("challenge/%s", id)},
+			ForceRemove: true,
+		})
 		if err != nil {
-			time.Sleep(500 * time.Millisecond)
-		} else {
-			gologger.Debug("built container", logrus.Fields{
-				"id":    id,
-				"tries": i,
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(runError{
+				Code:    http.StatusInternalServerError,
+				Message: "could not build image",
 			})
-			resp = &r
-			break
+			gologger.Warn("could not build image", err, nil)
+			return
 		}
-	}
 
-	if resp.ID == "" {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(runError{
-			Code:    http.StatusInternalServerError,
-			Message: "could not build container",
-		})
-		gologger.Warn("could not build container", err, nil)
-		return
-	}
+		// create the container
+		resp := &container.ContainerCreateCreatedBody{}
+		for i := 0; i < 32; i++ {
+			r, err := cr.Docker.ContainerCreate(ctx, &container.Config{
+				Image: fmt.Sprintf("challenge/%s", id),
+			}, nil, nil, nil, id)
+			if err != nil {
+				time.Sleep(500 * time.Millisecond)
+			} else {
+				gologger.Debug("built container", logrus.Fields{
+					"id":    id,
+					"tries": i,
+				})
+				resp = &r
+				break
+			}
+		}
 
-	// start the container
-	if err := cr.Docker.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(runError{
-			Code:    http.StatusInternalServerError,
-			Message: "could not start container",
-		})
-		gologger.Warn("could not start container", err, nil)
-		return
-	}
+		if resp.ID == "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(runError{
+				Code:    http.StatusInternalServerError,
+				Message: "could not build container",
+			})
+			gologger.Warn("could not build container", err, nil)
+			return
+		}
+
+		// start the container
+		if err := cr.Docker.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(runError{
+				Code:    http.StatusInternalServerError,
+				Message: "could not start container",
+			})
+			gologger.Warn("could not start container", err, nil)
+			return
+		}
+	}()
 
 	json.NewEncoder(w).Encode(runResp{
 		ID:       id,
