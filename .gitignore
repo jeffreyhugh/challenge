@@ -1,0 +1,6 @@
+*.pem
+*.env
+*.key
+*.crt
+
+backend/submissions/*
